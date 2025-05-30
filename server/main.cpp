@@ -1,7 +1,18 @@
 #include <iostream>
 #include <sys/socket.h>
 
+#include "tcp_layer.hpp"
+
 int main() {
     
+    net_layer::Server srv;
+
+    if (!(srv.create_socket() && srv.bind_socket(8080) && srv.start_listening()))
+        return 1;
+    
+    if (srv.accept_connection()) {
+        srv.handle_client();
+    }
+
     return 0;
 }
