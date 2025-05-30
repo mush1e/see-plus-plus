@@ -3,13 +3,14 @@ CXXFLAGS := -Wall -Wextra -std=c++17
 SRC_DIR := server
 BIN := see-plus-plus
 
-# Automatically find all .cpp files in the server directory
 SOURCES := $(wildcard $(SRC_DIR)/*.cpp)
 OBJECTS := $(SOURCES:.cpp=.o)
 
-.PHONY: all build run clean
+.PHONY: all build run clean rebuild
 
 all: build
+
+rebuild: clean build run
 
 build: $(BIN)
 

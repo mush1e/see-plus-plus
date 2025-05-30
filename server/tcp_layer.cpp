@@ -85,16 +85,20 @@ namespace net_layer {
                 break;
             }
             
-            std::cout << "Received: " << buffer << std::endl;
+            std::string message = std::string(buffer, bytes_received);
+
+            // Clear carriage return and new lines 
+            message.erase(message.find_last_not_of(" \t\r\n") + 1);
+
+            std::cout << "Received: " << "|" << message << "|" << std::endl;
             
-            std::string response = "Echo: " + std::string(buffer);
-            send(client_socket, response.c_str(), response.length(), 0);
-            
-            if (std::string(buffer) == "quit") {
+            if (message == "quit") {
                 std::cout << "Client requested to quit" << std::endl;
                 break;
             }
-
+            
+            std::string response = "Echo: " + message + "\n";
+            send(client_socket, response.c_str(), response.length(), 0);
         }
     }
 

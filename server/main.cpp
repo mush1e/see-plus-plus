@@ -7,7 +7,7 @@ int main() {
     
     net_layer::Server srv;
 
-    if (!(srv.create_socket() && srv.bind_socket(8080) && srv.start_listening()))
+    if (!(srv.bind_socket(8080) && srv.start_listening()))
         return 1;
     
     if (srv.accept_connection()) {
