@@ -14,6 +14,7 @@ namespace net_layer {
             return false;
         }
         
+        // FOR DEVELOPMENT ONLY
         // Let socket address be reused immediately 
         int opt = 1;
         if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
@@ -49,7 +50,7 @@ namespace net_layer {
         this->server_addr.sin_port        = htons(port);        // Convert port to network byte order (big-endian)
 
         if (bind(this->server_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) == -1) {
-            std::cerr << "Bind failed" << std::endl;
+            perror("Bind failed");
             return false;
         }
 
@@ -60,7 +61,7 @@ namespace net_layer {
     bool Server::start_listening(int max_conns) {
 
         if(listen(server_socket, max_conns) == -1) {
-            std::cerr << "Listen Failed" << std::endl;
+            perror("Listen Failed");
             return false;
         }
 
@@ -68,58 +69,65 @@ namespace net_layer {
         return true;
     }
 
-    bool Server::accept_connection() {
-        client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &client_addr_len);
-
-        if (client_socket == -1) {
-            std::cerr << "Accept failed" << std::endl;
-            return false;
-        }
-
-        char client_ip[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);      // Convert Client IP to Readable format
-        
-        std::cout << "Connection accepted from " << client_ip 
-                  << ":" << ntohs(client_addr.sin_port) << std::endl;
-        return true;
-    }
     
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~ HANDLE CLIENT ~~~~~~~~~~~~~~~~~~~~~~~~~~ 
 
-    void Server::handle_client() {
-        char buffer [1024];
-    
+    // In this handle client an external function accepts a connection and passes 
+    // client socket and the socket address to this function treating it kinda 
+    // like a worker function | also since std::cout is not thread safe we use a
+    // std::mutex (cout_mtx) to avoid garbage output
+    void Server::handle_client_threaded(int client_sock, sockaddr_in client_addr) {
+        char buffer[1024];
+
+        char client_ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);      // Convert Client IP to Readable format
+
+        {
+            std::lock_guard<std::mutex> lock(this->cout_mtx);
+             std::cout << "Connection accepted from " << client_ip 
+                  << ":" << ntohs(client_addr.sin_port) << std::endl;
+        }
+
         for (;;) {
             memset(buffer, 0, sizeof(buffer));
 
-            ssize_t bytes_received = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
-            
-            if (bytes_received <= 0) {
-                if (bytes_received == 0) {
-                    std::cout << "Client disconnected" << std::endl;
+            ssize_t bytes_recv = recv(client_sock, buffer, sizeof(buffer)-1, 0);
+            if (bytes_recv <= 0) {
+                if (bytes_recv == 0) {
+                    std::lock_guard<std::mutex> lock(this->cout_mtx);
+                    std::cout << "Client " << client_ip << " disconnected" << std::endl;
                 } else {
-                    std::cerr << "Receive failed" << std::endl;
+                    std::lock_guard<std::mutex> lock(this->cout_mtx);
+                    std::cerr << "Receive failed for client " << client_ip << std::endl;
                 }
                 break;
             }
-            
-            std::string message = std::string(buffer, bytes_received);
 
-            // Clear carriage return and new lines 
-            message.erase(message.find_last_not_of(" \t\r\n") + 1);
+            std::string msg(buffer, bytes_recv);
+            msg.erase(msg.find_last_not_of(" \t\r\n") + 1);
 
-            std::cout << "Received: " << "|" << message << "|" << std::endl;
-            
-            if (message == "quit") {
-                std::cout << "Client requested to quit" << std::endl;
+            {
+                std::lock_guard<std::mutex> lock(this->cout_mtx);
+                std::cout << "Client - [" << client_ip << "] has sent : |" << msg << "|" << std::endl; 
+            }
+
+            if(msg == "quit") {
+                std::lock_guard<std::mutex> lock(this->cout_mtx);
+                std::cout << "Client " << client_ip << " requested to quit" << std::endl;
                 break;
             }
-            
-            std::string response = "Echo: " + message + "\n";
-            send(client_socket, response.c_str(), response.length(), 0);
+
+            std::string resp = "Echo : " + msg + "\n";
+            send(client_sock, resp.c_str(), resp.length(), 0);
+        }
+
+        close(client_sock);
+
+        {
+            std::lock_guard<std::mutex> lock(this->cout_mtx);
+            std::cout << "Thread for client " << client_ip << " finished" << std::endl;
         }
     }
-
 
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~ CLEANUP AND DESTRUCTOR ~~~~~~~~~~~~~~~~~~~~~~~~~~ 
     void Server::cleanup() {

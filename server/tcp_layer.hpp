@@ -1,6 +1,9 @@
 #pragma once
 
 #include <iostream>
+#include <vector>
+#include <mutex>
+#include <thread>
 #include <signal.h>      // For signals, graceful shutdown
 #include <sys/socket.h>  // For socket functions
 #include <netinet/in.h>  // For sockaddr_in structure
@@ -18,17 +21,24 @@ namespace net_layer {
         bool bind_socket(uint16_t port = 8080);
         bool start_listening(int max_conns = 5);
         bool accept_connection();
-        
+
+
         void setup_signal_handlers();
         void handle_client();
+        void handle_client_threaded(int client_sock, sockaddr_in client_addr);
+        void await_all();
         void cleanup();
+
 
     private:
         int server_socket = -1;
         int client_socket = -1;
         sockaddr_in server_addr{};
-        sockaddr_in client_addr{};
-        socklen_t client_addr_len = sizeof(client_addr);
+        // sockaddr_in client_addr{};
+        // socklen_t client_addr_len = sizeof(client_addr);
+
+        std::vector<std::thread> client_threads {};
+        std::mutex cout_mtx {};
 
         static Server* instance;
         static void signal_handler(int signal);
