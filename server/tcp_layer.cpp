@@ -69,6 +69,47 @@ namespace net_layer {
         return true;
     }
 
+    // ~~~~~~~~~~~~~~~~~~~~~~~~~~ START RUNNING SERVER ~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    void Server::run_server() {
+        if (!(bind_socket(8080) && start_listening())) 
+            return;
+        
+        std::cout << "Server running. Press Ctrl+C to stop" << std::endl;
+
+        for (;;) {
+            sockaddr_in client_addr {};
+            socklen_t client_addr_len = sizeof(client_addr);
+
+            int client_sock = accept(server_socket, (sockaddr*)&client_addr, &client_addr_len);
+            
+            if (client_sock == -1) {
+                if (errno == EINTR) {
+                    std::cout << "Accept interrupted. Shutting Down..." << std::endl;
+                    break;
+                }
+                perror("Accept failed");
+                continue;
+            }
+
+            if (active_clients.load() >= MAX_CLIENTS) {
+                std::cout << "Server at maximum capacity. Rejecting new client." << std::endl;
+                close(client_sock);
+                continue;
+            }
+
+            active_clients.fetch_add(1);
+
+            client_threads.emplace_back(&Server::handle_client_threaded, this, client_sock, client_addr);
+            {
+                std::lock_guard<std::mutex> lock(this->cout_mtx);
+                std::cout << "Created thread for new client. Active clients: " 
+                      << active_clients.load() << "/" << MAX_CLIENTS << std::endl;
+            }   
+        }
+
+        await_all();
+    }
     
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~ HANDLE CLIENT ~~~~~~~~~~~~~~~~~~~~~~~~~~ 
 
@@ -123,21 +164,19 @@ namespace net_layer {
 
         close(client_sock);
 
+        active_clients.fetch_sub(1);
+
         {
             std::lock_guard<std::mutex> lock(this->cout_mtx);
-            std::cout << "Thread for client " << client_ip << " finished" << std::endl;
+            std::cout << "Thread for client " << client_ip << " finished. Active clients: " 
+                      << active_clients.load() << "/" << MAX_CLIENTS << std::endl;
         }
     }
 
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~ CLEANUP AND DESTRUCTOR ~~~~~~~~~~~~~~~~~~~~~~~~~~ 
     void Server::cleanup() {
         std::cout << "Cleaning up server resources..." << std::endl;
-        
-        if (client_socket != -1) {
-            shutdown(client_socket, SHUT_RDWR);  // Graceful shutdown
-            close(client_socket);
-            client_socket = -1;
-        }
+    
         
         if (server_socket != -1) {
             shutdown(server_socket, SHUT_RDWR);  // Graceful shutdown
@@ -155,6 +194,19 @@ namespace net_layer {
             instance->cleanup();
 
         exit(0);
+    }
+
+    void Server::await_all() {
+        std::cout << "Waiting for all client threads to finish..." << std::endl;
+        
+        for (auto& thread : client_threads) {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+        
+        client_threads.clear();
+        std::cout << "All client threads finished" << std::endl;
     }
 
     Server::~Server(){

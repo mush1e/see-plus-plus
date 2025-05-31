@@ -4,12 +4,15 @@
 #include <vector>
 #include <mutex>
 #include <thread>
+#include <atomic>        // For threadsafe atomic operations
 #include <signal.h>      // For signals, graceful shutdown
 #include <sys/socket.h>  // For socket functions
 #include <netinet/in.h>  // For sockaddr_in structure
 #include <unistd.h>      // For close() function
 #include <string.h>      // For memset
 #include <arpa/inet.h>   // For inet_addr
+
+#define MAX_CLIENTS 10
 
 namespace net_layer {
     class Server {
@@ -20,7 +23,7 @@ namespace net_layer {
         bool create_socket();
         bool bind_socket(uint16_t port = 8080);
         bool start_listening(int max_conns = 5);
-        bool accept_connection();
+        void run_server();
 
 
         void setup_signal_handlers();
@@ -32,10 +35,9 @@ namespace net_layer {
 
     private:
         int server_socket = -1;
-        int client_socket = -1;
+
+        std::atomic<int> active_clients {0};
         sockaddr_in server_addr{};
-        // sockaddr_in client_addr{};
-        // socklen_t client_addr_len = sizeof(client_addr);
 
         std::vector<std::thread> client_threads {};
         std::mutex cout_mtx {};
