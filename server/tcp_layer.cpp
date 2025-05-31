@@ -4,6 +4,8 @@ namespace net_layer {
     
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~ INIT SETUP ~~~~~~~~~~~~~~~~~~~~~~~~~~ 
 
+    Server* Server::instance = nullptr;
+
     bool Server::create_socket() {
         this->server_socket = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -12,12 +14,28 @@ namespace net_layer {
             return false;
         }
         
+        // Let socket address be reused immediately 
+        int opt = 1;
+        if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+            perror("setsockopt SO_REUSEADDR failed");
+            close(server_socket);
+            return false;
+        }
+
         std::cout << "Socket created successfully" << std::endl;
         return true;
     }
 
+
+    void Server::setup_signal_handlers() {
+        this->instance = this;
+        signal(SIGINT, signal_handler);
+        signal(SIGTERM, signal_handler);
+    }
+
     Server::Server(){
         create_socket();
+        setup_signal_handlers();
     }
 
     
@@ -105,9 +123,31 @@ namespace net_layer {
 
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~ CLEANUP AND DESTRUCTOR ~~~~~~~~~~~~~~~~~~~~~~~~~~ 
     void Server::cleanup() {
-        if (server_socket != -1) close(server_socket);
-        if (client_socket != -1) close(client_socket);
+        std::cout << "Cleaning up server resources..." << std::endl;
+        
+        if (client_socket != -1) {
+            shutdown(client_socket, SHUT_RDWR);  // Graceful shutdown
+            close(client_socket);
+            client_socket = -1;
+        }
+        
+        if (server_socket != -1) {
+            shutdown(server_socket, SHUT_RDWR);  // Graceful shutdown
+            close(server_socket);
+            server_socket = -1;
+        }
+        
+        std::cout << "Server cleaned up successfully" << std::endl;
     }    
+
+    void Server::signal_handler(int signal) {
+        std::cout << std::endl << "Recieved signal : " << signal << std::endl << "initiating graceful shutdown." << std::endl;
+        
+        if (instance != nullptr)
+            instance->cleanup();
+
+        exit(0);
+    }
 
     Server::~Server(){
         cleanup();
