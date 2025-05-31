@@ -4,6 +4,7 @@
 #include <vector>
 #include <mutex>
 #include <thread>
+#include <chrono>        // For connection timeouts to prevent zombie connections
 #include <atomic>        // For threadsafe atomic operations
 #include <signal.h>      // For signals, graceful shutdown
 #include <sys/socket.h>  // For socket functions

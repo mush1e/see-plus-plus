@@ -72,7 +72,7 @@ namespace net_layer {
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~ START RUNNING SERVER ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     void Server::run_server() {
-        if (!(bind_socket(8080) && start_listening())) 
+        if (!(bind_socket(8080) && start_listening(10))) 
             return;
         
         std::cout << "Server running. Press Ctrl+C to stop" << std::endl;
@@ -108,7 +108,6 @@ namespace net_layer {
             }   
         }
 
-        await_all();
     }
     
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~ HANDLE CLIENT ~~~~~~~~~~~~~~~~~~~~~~~~~~ 
@@ -123,11 +122,24 @@ namespace net_layer {
         char client_ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);      // Convert Client IP to Readable format
 
+        timeval timeout;
+        timeout.tv_sec = 30;
+        timeout.tv_usec = 0;
+
+        if (setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+            perror("Failed to set socket timeout");
+        }
+
+        // Locked to prevent jumbled output since std::cout isn't thread safe
         {
             std::lock_guard<std::mutex> lock(this->cout_mtx);
-             std::cout << "Connection accepted from " << client_ip 
-                  << ":" << ntohs(client_addr.sin_port) << std::endl;
+            std::cout << "Connection accepted from " << client_ip 
+                      << ":" << ntohs(client_addr.sin_port) 
+                      << " (timeout: " << timeout.tv_sec << "s)" 
+                      << std::endl;
         }
+
+        auto connection_start = std::chrono::steady_clock::now();
 
         for (;;) {
             memset(buffer, 0, sizeof(buffer));
@@ -137,16 +149,29 @@ namespace net_layer {
                 if (bytes_recv == 0) {
                     std::lock_guard<std::mutex> lock(this->cout_mtx);
                     std::cout << "Client " << client_ip << " disconnected" << std::endl;
-                } else {
+                } 
+                // This is a timeout - client took too long to send data
+                else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    auto now = std::chrono::steady_clock::now();
+                    auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - connection_start);
+                    std::lock_guard<std::mutex> lock(this->cout_mtx);
+                    std::cout << "Client " << client_ip << " timed out after " 
+                              << duration.count() << " seconds - disconnecting zombie connection" << std::endl;
+                } 
+                else {
                     std::lock_guard<std::mutex> lock(this->cout_mtx);
                     std::cerr << "Receive failed for client " << client_ip << std::endl;
                 }
                 break;
             }
+            
+            // Reset connectiontimer once we recieve a message
+            connection_start = std::chrono::steady_clock::now();
 
             std::string msg(buffer, bytes_recv);
             msg.erase(msg.find_last_not_of(" \t\r\n") + 1);
 
+            // Locked to prevent jumbled output since std::cout isn't thread safe
             {
                 std::lock_guard<std::mutex> lock(this->cout_mtx);
                 std::cout << "Client - [" << client_ip << "] has sent : |" << msg << "|" << std::endl; 
@@ -163,9 +188,9 @@ namespace net_layer {
         }
 
         close(client_sock);
-
         active_clients.fetch_sub(1);
 
+        // Locked to prevent jumbled output since std::cout isn't thread safe
         {
             std::lock_guard<std::mutex> lock(this->cout_mtx);
             std::cout << "Thread for client " << client_ip << " finished. Active clients: " 
@@ -183,6 +208,8 @@ namespace net_layer {
             close(server_socket);
             server_socket = -1;
         }
+
+        await_all();
         
         std::cout << "Server cleaned up successfully" << std::endl;
     }    
