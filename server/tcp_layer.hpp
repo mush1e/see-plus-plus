@@ -15,7 +15,7 @@
 
 #define MAX_CLIENTS 10
 
-namespace net_layer {
+namespace TRANSPORT {
     class Server {
     public:
         Server();

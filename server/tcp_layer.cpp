@@ -1,6 +1,6 @@
 #include "tcp_layer.hpp"
 
-namespace net_layer {
+namespace TRANSPORT {
     
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~ INIT SETUP ~~~~~~~~~~~~~~~~~~~~~~~~~~ 
 
