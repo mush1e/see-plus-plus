@@ -13,6 +13,8 @@
 #include <string.h>      // For memset
 #include <arpa/inet.h>   // For inet_addr
 
+#include "task.hpp"
+
 #define MAX_CLIENTS 10
 
 namespace TRANSPORT {
