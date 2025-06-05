@@ -26,8 +26,6 @@ bool Server::start(uint16_t port) {
 
 void Server::stop() {
     event_loop_.stop();
-    if (event_thread_.joinable())
-        event_thread_.join();
 }
 
 void Server::wait() {
