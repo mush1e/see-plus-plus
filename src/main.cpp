@@ -5,6 +5,7 @@
 SERVER::Server* global_server = nullptr;
 
 void signal_handler(int sig) {
+    (void) sig;
     if (global_server)
         global_server->stop();
 }

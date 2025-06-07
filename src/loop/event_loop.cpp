@@ -90,16 +90,24 @@ void EventLoop::handle_new_connections() {
 }
 
 void EventLoop::handle_client_event(int fd, uint32_t events) {
-    if (events & 1) { // Read available
+    if (events & FLAG_READ) { // Read available
         char buffer[1024];
         ssize_t bytes = recv(fd, buffer, sizeof(buffer), 0);
-        if (bytes <= 0)
+        if (bytes <= 0) {
             handle_client_disconnect(fd);
-        else {
-            std::cout << "Received data from fd " << fd << ": " << std::string(buffer, bytes) << std::endl;
+            return;
+        }
+        auto conn = this->connections_[fd];
+        conn->http_buffer.append(buffer, bytes);
+
+        auto pos = conn->http_buffer.find("\r\n\r\n");
+        if (pos != std::string::npos) {
+            std::cout << "Full HTTP request recieved\n" 
+                      << conn->http_buffer << std::endl;
+
         }
     }
-    if (events & (2 | 4)) // Disconnect or error
+    if (events & (FLAG_DISCONNECT | FLAG_ERROR)) // Disconnect or error
         handle_client_disconnect(fd);
 }
 

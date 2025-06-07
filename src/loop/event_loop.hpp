@@ -10,31 +10,35 @@
 
 namespace LOOP {
 
-class EventLoop {
-public:
-    EventLoop(THREADPOOL::ThreadPool* thread_pool);
-    ~EventLoop();
+    static constexpr uint32_t FLAG_READ       = 1;   // readable
+    static constexpr uint32_t FLAG_DISCONNECT = 2;   // EOF/closed
+    static constexpr uint32_t FLAG_ERROR      = 4;   // error
 
-    bool setup_server_socket(uint16_t port);
-    void run();
-    void stop();
+    class EventLoop {
+    public:
+        EventLoop(THREADPOOL::ThreadPool* thread_pool);
+        ~EventLoop();
 
-private:
-    void handle_event(const EVENT::EventData& event);
-    void handle_new_connections();
-    void handle_client_event(int fd, uint32_t events);
-    void handle_client_disconnect(int fd);
-    int make_socket_nonblocking(int socket_fd);
+        bool setup_server_socket(uint16_t port);
+        void run();
+        void stop();
 
-    std::unique_ptr<EVENT::EventNotifier> notifier_;
-    THREADPOOL::ThreadPool* thread_pool_;
-    int server_socket_;
+    private:
+        void handle_event(const EVENT::EventData& event);
+        void handle_new_connections();
+        void handle_client_event(int fd, uint32_t events);
+        void handle_client_disconnect(int fd);
+        int make_socket_nonblocking(int socket_fd);
 
-    std::atomic<bool> should_stop_{false};
+        std::unique_ptr<EVENT::EventNotifier> notifier_;
+        THREADPOOL::ThreadPool* thread_pool_;
+        int server_socket_;
 
-    // Manage active connections
-    std::map<int, std::shared_ptr<CORE::ConnectionState>> connections_;
-    std::mutex connections_mutex_;
-};
+        std::atomic<bool> should_stop_{false};
+
+        // Manage active connections
+        std::map<int, std::shared_ptr<CORE::ConnectionState>> connections_;
+        std::mutex connections_mutex_;
+    };
 
 } // namespace LOOP

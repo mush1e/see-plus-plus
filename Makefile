@@ -3,10 +3,11 @@ CXXFLAGS := -Wall -Wextra -std=c++17
 SRC_DIR := src
 BIN := see-plus-plus
 
-SOURCES := $(wildcard $(SRC_DIR)/*.cpp)
+# Find all .cpp files recursively in src directory
+SOURCES := $(shell find $(SRC_DIR) -name "*.cpp")
 OBJECTS := $(SOURCES:.cpp=.o)
 
-.PHONY: all build run clean rebuild
+.PHONY: all build run clean rebuild debug
 
 all: build
 
@@ -17,7 +18,8 @@ build: $(BIN)
 $(BIN): $(OBJECTS)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
-$(SRC_DIR)/%.o: $(SRC_DIR)/%.cpp
+# Pattern rule for compiling .cpp files to .o files
+%.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 run: build
