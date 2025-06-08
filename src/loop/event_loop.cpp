@@ -1,10 +1,15 @@
 #include "event_loop.hpp"
+#include "../threadpool/http_request_task.hpp"
+#include "../threadpool/websocket_handshake_task.hpp"
+
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstring>
 #include <iostream>
+
+
 
 namespace LOOP {
 
@@ -91,20 +96,49 @@ void EventLoop::handle_new_connections() {
 
 void EventLoop::handle_client_event(int fd, uint32_t events) {
     if (events & FLAG_READ) { // Read available
-        char buffer[1024];
-        ssize_t bytes = recv(fd, buffer, sizeof(buffer), 0);
-        if (bytes <= 0) {
-            handle_client_disconnect(fd);
-            return;
+        constexpr size_t BUF_SIZE = 4096;
+        char buffer[BUF_SIZE];
+        for (;;) {
+            ssize_t n = recv(fd, buffer, BUF_SIZE, 0);
+            if (n > 0) {
+                auto conn = this->connections_[fd];
+                conn->http_buffer.append(buffer, n);
+            } else if (n == 0) {
+                handle_client_disconnect(fd);
+                return;
+            } else {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    break;
+                } else {
+                    perror("recv");
+                    handle_client_disconnect(fd);
+                    return;
+                }
+            }
         }
-        auto conn = this->connections_[fd];
-        conn->http_buffer.append(buffer, bytes);
+        auto& buf = this->connections_[fd]->http_buffer;
+        auto header_end = buf.find("\r\n\r\n");
+        if (header_end != std::string::npos) {
+            // Extract the raw header block
+            std::string raw = buf.substr(0, header_end + 4);
 
-        auto pos = conn->http_buffer.find("\r\n\r\n");
-        if (pos != std::string::npos) {
-            std::cout << "Full HTTP request recieved\n" 
-                      << conn->http_buffer << std::endl;
+            // Sniff for WebSocket upgrade
+            bool is_ws =
+                raw.find("Upgrade: websocket") != std::string::npos &&
+                raw.find("Connection: Upgrade") != std::string::npos;
 
+            if (is_ws) {
+                this->thread_pool_->enqueue_task(
+                    std::make_unique<THREADPOOL::WebSocketHandshakeTask>(
+                        this->connections_[fd], raw));
+            } else {
+                this->thread_pool_->enqueue_task(
+                    std::make_unique<THREADPOOL::HTTPRequestTask>(
+                        this->connections_[fd], raw));
+            }
+
+            // Erase consumed bytes
+            buf.erase(0, header_end + 4);
         }
     }
     if (events & (FLAG_DISCONNECT | FLAG_ERROR)) // Disconnect or error
