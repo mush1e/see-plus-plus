@@ -13,7 +13,7 @@
 
 namespace LOOP {
 
-EventLoop::EventLoop(THREADPOOL::ThreadPool* thread_pool) : thread_pool_(thread_pool) {
+EventLoop::EventLoop(THREADPOOL::ThreadPool* thread_pool, CORE::Router &router) : thread_pool_(thread_pool), router_(router) {
     notifier_ = std::make_unique<EVENT::EventNotifier>();
 }
 
@@ -95,19 +95,35 @@ void EventLoop::handle_new_connections() {
 }
 
 void EventLoop::handle_client_event(int fd, uint32_t events) {
-    if (events & FLAG_READ) { // Read available
+    // 1) Readable?
+    if (events & FLAG_READ) {
+        std::shared_ptr<CORE::ConnectionState> conn;
+        {   // lock while grabbing the connection
+            std::lock_guard<std::mutex> lock(connections_mutex_);
+            auto it = connections_.find(fd);
+            if (it == connections_.end()) {
+                // no such connection (maybe raced a disconnect)
+                return;
+            }
+            conn = it->second;
+        }
+
+        // 2) Drain all available bytes into conn->http_buffer
         constexpr size_t BUF_SIZE = 4096;
         char buffer[BUF_SIZE];
         for (;;) {
             ssize_t n = recv(fd, buffer, BUF_SIZE, 0);
             if (n > 0) {
-                auto conn = this->connections_[fd];
                 conn->http_buffer.append(buffer, n);
-            } else if (n == 0) {
+            }
+            else if (n == 0) {
+                // client closed
                 handle_client_disconnect(fd);
                 return;
-            } else {
+            }
+            else {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    // no more data right now
                     break;
                 } else {
                     perror("recv");
@@ -116,7 +132,9 @@ void EventLoop::handle_client_event(int fd, uint32_t events) {
                 }
             }
         }
-        auto& buf = this->connections_[fd]->http_buffer;
+
+        // 3) Check once for end-of-headers
+        auto &buf = conn->http_buffer;
         auto header_end = buf.find("\r\n\r\n");
         if (header_end != std::string::npos) {
             // Extract the raw header block
@@ -124,26 +142,30 @@ void EventLoop::handle_client_event(int fd, uint32_t events) {
 
             // Sniff for WebSocket upgrade
             bool is_ws =
-                raw.find("Upgrade: websocket") != std::string::npos &&
-                raw.find("Connection: Upgrade") != std::string::npos;
+                raw.find("Upgrade: websocket")    != std::string::npos &&
+                raw.find("Connection: Upgrade")   != std::string::npos;
 
             if (is_ws) {
-                this->thread_pool_->enqueue_task(
+                thread_pool_->enqueue_task(
                     std::make_unique<THREADPOOL::WebSocketHandshakeTask>(
-                        this->connections_[fd], raw));
+                        conn, raw));
             } else {
-                this->thread_pool_->enqueue_task(
-                    std::make_unique<THREADPOOL::HTTPRequestTask>(
-                        this->connections_[fd], raw));
+                thread_pool_->enqueue_task(
+                    std::make_unique<THREADPOOL::HttpRequestTask>(
+                        conn, raw, router_));
             }
 
-            // Erase consumed bytes
+            // Erase only the consumed header bytes
             buf.erase(0, header_end + 4);
         }
     }
-    if (events & (FLAG_DISCONNECT | FLAG_ERROR)) // Disconnect or error
+
+    // 4) Hangup or error?
+    if (events & (FLAG_DISCONNECT | FLAG_ERROR)) {
         handle_client_disconnect(fd);
+    }
 }
+
 
 void EventLoop::handle_client_disconnect(int fd) {
     std::lock_guard<std::mutex> lock(connections_mutex_);

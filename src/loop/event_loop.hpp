@@ -3,6 +3,8 @@
 #include "../event/event_notifier.hpp"
 #include "../threadpool/threadpool.hpp"
 #include "../core/types.hpp"
+#include "../core/router.hpp"
+
 
 #include <map>
 #include <atomic>
@@ -16,7 +18,7 @@ namespace LOOP {
 
     class EventLoop {
     public:
-        EventLoop(THREADPOOL::ThreadPool* thread_pool);
+        EventLoop(THREADPOOL::ThreadPool* thread_pool, CORE::Router &router);
         ~EventLoop();
 
         bool setup_server_socket(uint16_t port);
@@ -32,6 +34,7 @@ namespace LOOP {
 
         std::unique_ptr<EVENT::EventNotifier> notifier_;
         THREADPOOL::ThreadPool* thread_pool_;
+        CORE::Router &router_;
         int server_socket_;
 
         std::atomic<bool> should_stop_{false};

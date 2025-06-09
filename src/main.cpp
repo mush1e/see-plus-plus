@@ -1,6 +1,9 @@
-#include "server/server.hpp"
 #include <signal.h>
 #include <iostream>
+
+#include "core/router.hpp"
+#include "server/server.hpp"
+#include "app/hello_controller.hpp"
 
 SERVER::Server* global_server = nullptr;
 
@@ -11,7 +14,11 @@ void signal_handler(int sig) {
 }
 
 int main() {
-    SERVER::Server server(8);
+
+    CORE::Router router;
+    router.add_route("GET", "^/$", std::make_shared<HelloController>());
+
+    SERVER::Server server(8, router);
     global_server = &server;
 
     signal(SIGINT, signal_handler);

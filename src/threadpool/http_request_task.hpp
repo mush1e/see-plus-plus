@@ -1,32 +1,25 @@
 #pragma once
 
-#include "./task.hpp"
-
-#include <iostream>
-#include <sstream>
-#include <unordered_map>
-#include <unistd.h>    // for close()
-#include <sys/socket.h> // for send() 
+#include "task.hpp"
+#include "../core/http.hpp"
+#include "../core/router.hpp"
+#include <memory>
+#include <string>
 
 namespace THREADPOOL {
-    class HTTPRequestTask : public Task {
-    public:
-        HTTPRequestTask(std::shared_ptr<CORE::ConnectionState> conn,
-                    const std::string& raw_headers);
 
-        void execute(int worker_id) override;
+class HttpRequestTask : public Task {
+public:
+    HttpRequestTask(std::shared_ptr<CORE::ConnectionState> conn,
+                    const std::string& raw_headers,
+                    CORE::Router &router);
 
-    private:
-        std::shared_ptr<CORE::ConnectionState> conn_;
-        std::string raw_headers_;
+    void execute(int worker_id) override;
 
-        // Parsed fields
-        std::string                                  method_;
-        std::string                                  path_;
-        std::string                                  version_;
-        std::unordered_map<std::string, std::string> headers_;
+private:
+    std::shared_ptr<CORE::ConnectionState> conn_;
+    std::string                           raw_headers_;
+    CORE::Router&                        router_;
+};
 
-        void parse_request(); 
-        void send_response();
-    };
-}
+} // namespace THREADPOOL

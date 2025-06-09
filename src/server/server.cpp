@@ -3,8 +3,8 @@
 
 namespace SERVER {
 
-Server::Server(int num_workers)
-    : thread_pool_(num_workers), event_loop_(&thread_pool_) {}
+Server::Server(int num_workers, CORE::Router &router)
+    : thread_pool_(num_workers), event_loop_(&thread_pool_, router), router_(router){}
 
 Server::~Server() {
     stop();
