@@ -1,9 +1,9 @@
-#include "event_notifier.hpp"
+#include "notifier.hpp"
 
 #include <stdexcept>    // for std::runtime_error
 #include <unistd.h>     // for close
 
-namespace EVENT {
+namespace REACTOR {
 
     EventNotifier::EventNotifier() {
         #ifdef USE_EPOLL
@@ -181,4 +181,4 @@ namespace EVENT {
         return result;
     }
 
-} // namespace EVENT
+} // namespace REACTOR

@@ -14,7 +14,7 @@
 #include <vector>
 #include <cstdint>  // for uint32_t
 
-namespace EVENT {
+namespace REACTOR {
 
     // Event flags for cross-platform compatibility
     enum EventFlags : uint32_t {
@@ -59,4 +59,4 @@ namespace EVENT {
         #endif
     };
 
-} // namespace EVENT
+} // namespace REACTOR
