@@ -41,4 +41,4 @@ namespace REACTOR {
 
     };
 
-} // namespacr REACTOR
+} // namespace REACTOR
