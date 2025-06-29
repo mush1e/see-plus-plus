@@ -1,5 +1,5 @@
 CXX := g++
-CXXFLAGS := -Wall -Wextra -std=c++17 -lssl -lcrypto
+CXXFLAGS := -Wall -Wextra -std=c++17
 SRC_DIR := src
 BIN := see-plus-plus
 
