@@ -1,5 +1,6 @@
 #include "event_loop.hpp"
 
+#include <iostream>
 #include <sys/socket.h> // For the Berkeley sockets API
 #include <unistd.h>     // For close
 #include <fcntl.h>      // For file control shit
@@ -63,4 +64,24 @@ namespace REACTOR {
         return notifier->add_fd(server_socket);
     }
 
+    void EventLoop::run() {
+        std::cout << "🚀 Event loop started!" << std::endl;
+        while (!should_stop) {
+            auto events = notifier->wait_for_events();
+            for (const auto& event : events) {
+                handle_event(event);
+            }
+        }
+    }
+
+    void EventLoop::stop() {
+        should_stop.store(false);
+    }
+
+    void EventLoop::handle_event(const EventData& event) {
+        if (event.fd == server_socket)
+            handle_new_connections();
+        else
+            handle_client_event(event.fd, event.events);
+    }
 } // namespace REACTOR
