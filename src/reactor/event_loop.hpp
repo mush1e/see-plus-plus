@@ -36,9 +36,9 @@ namespace REACTOR {
         std::atomic<bool> should_stop {};
 
         // Manage active connections
-        std::map<int, std::shared_ptr<CORE::ConnectionState>> connections_;
-        std::mutex connections_mutex_;
-
+        std::map<int, std::shared_ptr<CORE::ConnectionState>> connections;
+        std::mutex connections_mutex;
+        std::mutex cout_mutex;
     };
 
 } // namespace REACTOR

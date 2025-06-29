@@ -5,6 +5,8 @@
 #include <unistd.h>     // For close
 #include <fcntl.h>      // For file control shit
 #include <arpa/inet.h>  // For sockaddr_in and stuff 
+#include <errno.h>      // For errno checking error types
+
 
 namespace REACTOR {
 
@@ -75,7 +77,8 @@ namespace REACTOR {
     }
 
     void EventLoop::stop() {
-        should_stop.store(false);
+        // flip the flag - we out this bih
+        should_stop.store(true);
     }
 
     void EventLoop::handle_event(const EventData& event) {
@@ -84,4 +87,99 @@ namespace REACTOR {
         else
             handle_client_event(event.fd, event.events);
     }
+
+    void EventLoop::handle_new_connections() {
+        // Accepting pending connections 
+        for (;;) {
+            sockaddr_in client_addr {};
+            socklen_t client_len = sizeof(client_addr);
+
+            // Try accepting a new client.
+            // If there are no pending connections (EAGAIN/EWOULDBLOCK), 
+            // break out — we're done for now.
+            // If it's a real error, log it and bail out of the accept loop.
+            int client_fd = accept(server_socket, (sockaddr*)&client_addr, &client_len);
+            if (client_fd == -1) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    break;
+                perror("accept failed");
+                break;
+            }
+            
+            make_socket_nonblocking(client_fd);
+            notifier->add_fd(client_fd);
+
+            // Make client ip something readable
+            char client_ip[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
+            uint16_t client_port = ntohs(client_addr.sin_port);
+
+            // Wrap client data into neat lil shared pointer
+            auto conn = std::make_shared<CORE::ConnectionState>(client_fd, client_ip, client_port);
+
+            {
+                std::lock_guard<std::mutex> lock(connections_mutex);
+                connections[client_fd] = conn;
+            }
+
+            {
+                // COUT IS NOT THREAD SAFE
+                std::lock_guard<std::mutex> lock(cout_mutex);
+                std::cout << "New Client " << client_ip << ":" << client_port << std::endl;
+            }
+        }
+    }
+
+    void EventLoop::handle_client_event(int fd, uint32_t events) {
+        // 1) Readable?
+        if (events & FLAG_READ) {
+            std::shared_ptr<CORE::ConnectionState> conn;
+            {   // lock while grabbing the connection
+                std::lock_guard<std::mutex> lock(connections_mutex);
+                auto it = connections.find(fd);
+                if (it == connections.end()) {
+                    // no such connection (maybe raced a disconnect)
+                    return;
+                }
+                conn = it->second;
+            }
+        
+            constexpr size_t BUF_SIZE = 4096;
+            char buffer[BUF_SIZE];
+            for (;;) {
+                ssize_t n = recv(fd, buffer, BUF_SIZE, 0);
+                if (n > 0) {
+                    conn->http_buffer.append(buffer, n);
+                } else if (n == 0) {
+                    handle_client_disconnect(fd);
+                    return;
+                } else {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK)
+                        break;
+                    else {
+                        perror("recv");
+                        handle_client_disconnect(fd);
+                        return;
+                    }
+                }
+            }
+        }
+        if (events & (FLAG_DISCONNECT | FLAG_ERROR)) {
+            handle_client_disconnect(fd);
+        }
+    }
+
+    void EventLoop::handle_client_disconnect(int fd) {
+        std::lock_guard<std::mutex> lock(connections_mutex);
+        if (connections.find(fd) == connections.end()) {
+            return;
+        }
+
+        notifier->remove_fd(fd);
+        close(fd);
+        connections.erase(fd);
+        
+        std::cout << "Client disconnected fd: " << fd << std::endl;
+    }
+
 } // namespace REACTOR
