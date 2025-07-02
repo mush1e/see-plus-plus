@@ -1,5 +1,6 @@
 #include "event_loop.hpp"
 #include "../core/http_request_task.hpp"
+#include "../core/logger.hpp"
 
 #include <iostream>
 #include <memory>
@@ -8,7 +9,8 @@
 #include <fcntl.h>      // For file control shit
 #include <arpa/inet.h>  // For sockaddr_in and stuff 
 #include <errno.h>      // For errno checking error types
-
+#include <thread>
+#include <chrono>
 
 namespace REACTOR {
 
@@ -20,18 +22,33 @@ namespace REACTOR {
         // existing flags intact.
         // This makes all future I/O operations on the socket non-blocking.
         // - read()/recv() will return immediately if there's no data rather than blocking
-        // - wrtie()/send() will return immediately if the socket is not ready for writing
-        // Usefull for us since we're doing event driven shit
+        // - write()/send() will return immediately if the socket is not ready for writing
+        // Useful for us since we're doing event driven shit
         return fcntl(socket_fd, F_SETFL, flags | O_NONBLOCK);
     }
 
-    EventLoop::EventLoop(EXECUTOR::ThreadPool& threadpool, CORE::Router& r) : thread_pool(&threadpool), router(r) {
+    EventLoop::EventLoop(EXECUTOR::ThreadPool& threadpool, CORE::Router& r) 
+        : thread_pool(&threadpool), router(r) {
         this->notifier = std::make_unique<EventNotifier>();
+        
+        // Start cleanup thread for connection management
+        cleanup_thread = std::thread(&EventLoop::cleanup_worker, this);
+        
+        LOG_INFO("EventLoop initialized with connection manager");
     }
 
     EventLoop::~EventLoop() {
-        if (server_socket != -1)
+        // Stop cleanup thread first
+        cleanup_should_stop.store(true);
+        if (cleanup_thread.joinable()) {
+            cleanup_thread.join();
+        }
+        
+        if (server_socket != -1) {
             close(server_socket);
+        }
+        
+        LOG_INFO("EventLoop destroyed");
     }
 
     bool EventLoop::setup_server_socket(uint16_t port) {
@@ -40,8 +57,10 @@ namespace REACTOR {
         // 0           - represents the use of the default protocol 
         server_socket = socket(AF_INET, SOCK_STREAM, 0);
         
-        if (server_socket == -1)
+        if (server_socket == -1) {
+            LOG_ERROR("Failed to create server socket:", strerror(errno));
             return false;
+        }
         
         // Allows the socket to be quickly reused after it is closed, 
         // avoiding the "Address is already in use" error.
@@ -49,49 +68,71 @@ namespace REACTOR {
         // since it allows the program to rebind to the same port without
         // waiting for the OS to release it
         int opt = 1;
-        setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-        if (make_socket_nonblocking(server_socket) == -1)
+        if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
+            LOG_ERROR("Failed to set SO_REUSEADDR:", strerror(errno));
+            close(server_socket);
             return false;
+        }
+
+        if (make_socket_nonblocking(server_socket) == -1) {
+            LOG_ERROR("Failed to make server socket non-blocking:", strerror(errno));
+            close(server_socket);
+            return false;
+        }
         
         sockaddr_in addr {};
         addr.sin_family      = AF_INET;
         addr.sin_addr.s_addr = INADDR_ANY;
         addr.sin_port = htons(port);            // Hardware to network byte order conversion
 
-        if (bind(server_socket, (sockaddr*)&addr, sizeof(addr)) == -1)
+        if (bind(server_socket, (sockaddr*)&addr, sizeof(addr)) == -1) {
+            LOG_ERROR("Failed to bind to port", port, ":", strerror(errno));
+            close(server_socket);
             return false;
+        }
         
-        if (listen(server_socket, 128) == -1)
+        if (listen(server_socket, 128) == -1) {
+            LOG_ERROR("Failed to listen on socket:", strerror(errno));
+            close(server_socket);
             return false;
+        }
 
-        return notifier->add_fd(server_socket);
+        if (!notifier->add_fd(server_socket)) {
+            LOG_ERROR("Failed to add server socket to event notifier");
+            close(server_socket);
+            return false;
+        }
+
+        LOG_INFO("Server socket setup successfully on port", port);
+        return true;
     }
 
     void EventLoop::run() {
-        std::cout << "🚀 Event loop started!" << std::endl;
-        while (!should_stop) {
-            auto events = notifier->wait_for_events();
+        LOG_INFO("🚀 Event loop started!");
+        while (!should_stop.load()) {
+            auto events = notifier->wait_for_events(1000); // 1 second timeout
             for (const auto& event : events) {
                 handle_event(event);
             }
         }
+        LOG_INFO("Event loop stopped");
     }
 
     void EventLoop::stop() {
-        // flip the flag - we out this bih
+        LOG_INFO("Stopping event loop...");
         should_stop.store(true);
     }
 
     void EventLoop::handle_event(const EventData& event) {
-        if (event.fd == server_socket)
+        if (event.fd == server_socket) {
             handle_new_connections();
-        else
+        } else {
             handle_client_event(event.fd, event.events);
+        }
     }
 
     void EventLoop::handle_new_connections() {
-        // Accepting pending connections 
+        // Accept all pending connections
         for (;;) {
             sockaddr_in client_addr {};
             socklen_t client_len = sizeof(client_addr);
@@ -102,96 +143,117 @@ namespace REACTOR {
             // If it's a real error, log it and bail out of the accept loop.
             int client_fd = accept(server_socket, (sockaddr*)&client_addr, &client_len);
             if (client_fd == -1) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK)
-                    break;
-                perror("accept failed");
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    break; // No more pending connections
+                }
+                LOG_ERROR("accept failed:", strerror(errno));
                 break;
             }
             
-            make_socket_nonblocking(client_fd);
-            notifier->add_fd(client_fd);
+            // Make client socket non-blocking
+            if (make_socket_nonblocking(client_fd) == -1) {
+                LOG_ERROR("Failed to make client socket non-blocking:", strerror(errno));
+                close(client_fd);
+                continue;
+            }
 
-            // Make client ip something readable
+            // Add to event notifier
+            if (!notifier->add_fd(client_fd)) {
+                LOG_ERROR("Failed to add client socket to event notifier");
+                close(client_fd);
+                continue;
+            }
+
+            // Extract client info
             char client_ip[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
             uint16_t client_port = ntohs(client_addr.sin_port);
 
-            // Wrap client data into neat lil shared pointer
-            auto conn = std::make_shared<CORE::ConnectionState>(client_fd, client_ip, client_port);
-
-            {
-                std::lock_guard<std::mutex> lock(connections_mutex);
-                connections[client_fd] = conn;
+            // Add to connection manager
+            if (!connection_manager.add_connection(client_fd, client_ip, client_port)) {
+                LOG_WARN("Connection limit reached, rejecting client", client_ip, ":", client_port);
+                close(client_fd);
+                continue;
             }
 
-            {
-                // COUT IS NOT THREAD SAFE
-                std::lock_guard<std::mutex> lock(cout_mutex);
-                std::cout << "New Client " << client_ip << ":" << client_port << std::endl;
-            }
+            LOG_DEBUG("New client connected:", client_ip, ":", client_port, 
+                     "(fd:", client_fd, ", total connections:", connection_manager.connection_count(), ")");
         }
     }
 
     void EventLoop::handle_client_event(int fd, uint32_t events) {
         if (events & FLAG_READ) {
-            std::shared_ptr<CORE::ConnectionState> conn;
-            {   
-                std::lock_guard<std::mutex> lock(connections_mutex);
-                auto it = connections.find(fd);
-                if (it == connections.end()) {
-                    return;
-                }
-                conn = it->second;
+            auto conn = connection_manager.get_connection(fd);
+            if (!conn) {
+                LOG_WARN("Received event for unknown connection fd:", fd);
+                return;
+            }
+
+            auto parser = connection_manager.get_parser(fd);
+            if (!parser) {
+                LOG_ERROR("No parser available for connection fd:", fd);
+                handle_client_disconnect(fd);
+                return;
             }
         
             constexpr size_t BUF_SIZE = 4096;
             char buffer[BUF_SIZE];
             bool should_disconnect = false;
             
+            // Read all available data
             for (;;) {
                 ssize_t n = recv(fd, buffer, BUF_SIZE, 0);
                 if (n > 0) {
-                    // Get or create parser for this connection
-                    std::unique_ptr<CORE::HTTPParser>* parser_ptr = nullptr;
-                    {
-                        std::lock_guard<std::mutex> lock(parsers_mutex);
-                        auto& parser = parsers[fd];
-                        if (!parser) {
-                            parser = std::make_unique<CORE::HTTPParser>();
-                        }
-                        parser_ptr = &parser;
+                    // Check request size limit
+                    if (!connection_manager.check_request_size_limit(fd, n)) {
+                        LOG_WARN("Request size limit exceeded for fd:", fd);
+                        send_error_response(fd, 413, "Request Entity Too Large");
+                        should_disconnect = true;
+                        break;
                     }
+
+                    // Update last activity
+                    conn->last_activity = std::chrono::steady_clock::now();
                     
                     // Parse the incoming data
                     std::string data(buffer, n);
                     CORE::Request request;
                     
-                    if ((*parser_ptr)->parse(data, request)) {
+                    if (parser->parse(data, request)) {
                         // Complete request received - process it
+                        LOG_DEBUG("Complete HTTP request received from fd:", fd, 
+                                 request.method, request.path);
+                        
                         auto task = std::make_unique<CORE::HTTPRequestTask>(request, conn, router);
                         thread_pool->enqueue_task(std::move(task));
                         
-                        // Reset parser for next request
-                        (*parser_ptr)->reset();
+                        // Reset parser for next request (keep-alive support)
+                        connection_manager.reset_parser(fd);
                         
-                        // DON'T disconnect immediately - let the worker thread handle it
-                        // The HTTPRequestTask will close the connection after sending response
+                        // Don't disconnect - this connection can handle more requests
                         return;
-                    } else if ((*parser_ptr)->has_error()) {
+                        
+                    } else if (parser->has_error()) {
                         // Parsing error - send 400 Bad Request
+                        LOG_WARN("HTTP parsing error for fd:", fd);
                         send_error_response(fd, 400, "Bad Request");
                         should_disconnect = true;
                         break;
                     }
+                    // else: partial request, continue reading
                     
                 } else if (n == 0) {
+                    // Client closed connection gracefully
+                    LOG_DEBUG("Client closed connection fd:", fd);
                     should_disconnect = true;
                     break;
                 } else {
+                    // recv error
                     if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                        // No more data available right now
                         break;
                     } else {
-                        perror("recv");
+                        LOG_ERROR("recv error for fd:", fd, "-", strerror(errno));
                         should_disconnect = true;
                         break;
                     }
@@ -200,41 +262,86 @@ namespace REACTOR {
             
             if (should_disconnect) {
                 handle_client_disconnect(fd);
-                return;
             }
+        }
+        
+        // Handle other event types (error, hangup, etc.)
+        if (events & (FLAG_ERROR | FLAG_DISCONNECT)) {
+            LOG_DEBUG("Client error/disconnect event for fd:", fd);
+            handle_client_disconnect(fd);
         }
     }
 
     void EventLoop::close_connection(int fd) {
         handle_client_disconnect(fd);
     }
+
     void EventLoop::send_error_response(int fd, int status_code, const std::string& status_text) {
         CORE::Response response;
         response.status_code = status_code;
         response.status_text = status_text;
         response.headers["Content-Type"] = "text/plain";
         response.headers["Connection"] = "close";
-        response.headers["Server"] = "CustomHTTPServer/1.0";
+        response.headers["Server"] = "see-plus-plus/1.0";
         response.body = std::to_string(status_code) + " " + status_text;
         response.headers["Content-Length"] = std::to_string(response.body.size());
         
         std::string response_str = response.str();
-        send(fd, response_str.c_str(), response_str.size(), MSG_NOSIGNAL);
+        ssize_t sent = send(fd, response_str.c_str(), response_str.size(), MSG_NOSIGNAL);
+        
+        if (sent == -1) {
+            LOG_ERROR("Failed to send error response to fd:", fd, "-", strerror(errno));
+        }
     }
 
-    void REACTOR::EventLoop::handle_client_disconnect(int fd) {
-        std::lock_guard<std::mutex> connections_lock(connections_mutex);
-        std::lock_guard<std::mutex> parsers_lock(parsers_mutex);
-        
-        if (connections.find(fd) == connections.end()) {
-            return;
+    void EventLoop::handle_client_disconnect(int fd) {
+        auto conn = connection_manager.get_connection(fd);
+        if (!conn) {
+            return; // Already disconnected
         }
 
+        LOG_DEBUG("Disconnecting client fd:", fd, 
+                 "(", conn->client_ip, ":", conn->client_port, ")");
+
+        // Remove from event notifier
         notifier->remove_fd(fd);
-        close(fd);
-        connections.erase(fd);
-        parsers.erase(fd);  // Clean up parser
         
-        std::cout << "Client disconnected fd: " << fd << std::endl;
+        // Close socket
+        close(fd);
+        
+        // Remove from connection manager (this cleans up parser too)
+        connection_manager.remove_connection(fd);
+        
+        LOG_DEBUG("Client disconnected, remaining connections:", 
+                 connection_manager.connection_count());
     }
+
+    void EventLoop::cleanup_worker() {
+        LOG_DEBUG("Cleanup worker thread started");
+        
+        while (!cleanup_should_stop.load()) {
+            // Sleep for 30 seconds between cleanup cycles
+            std::this_thread::sleep_for(std::chrono::seconds(30));
+            
+            if (!cleanup_should_stop.load()) {
+                cleanup_timed_out_connections();
+            }
+        }
+        
+        LOG_DEBUG("Cleanup worker thread stopped");
+    }
+
+    void EventLoop::cleanup_timed_out_connections() {
+        auto timed_out = connection_manager.get_timed_out_connections();
+        
+        if (!timed_out.empty()) {
+            LOG_INFO("Cleaning up", timed_out.size(), "timed out connections");
+            
+            for (int fd : timed_out) {
+                LOG_DEBUG("Cleaning up timed out connection fd:", fd);
+                handle_client_disconnect(fd);
+            }
+        }
+    }
+
 } // namespace REACTOR

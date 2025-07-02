@@ -31,6 +31,7 @@ namespace REACTOR {
         void handle_client_event(int fd, uint32_t events);
         void handle_client_disconnect(int fd);
         void cleanup_timed_out_connections();
+        void cleanup_worker();
         int make_socket_nonblocking(int socket_fd);
         void send_error_response(int fd, int status_code, const std::string& status_text);
 
@@ -45,8 +46,6 @@ namespace REACTOR {
         // Cleanup thread for connection timeouts
         std::thread cleanup_thread;
         std::atomic<bool> cleanup_should_stop{false};
-        
-        void cleanup_worker();
     };
 
 } // namespace REACTOR
