@@ -12,7 +12,7 @@ public:
 <html>
 <head><title>Hello World</title></head>
 <body>
-    <h1>Hello World! 🌍</h1>
+    <h1>Hello World!!</h1>
     <p>Your HTTP server is working!</p>
     <p>Request method: )" + req.method + R"(</p>
     <p>Request path: )" + req.path + R"(</p>
