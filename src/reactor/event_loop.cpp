@@ -174,9 +174,9 @@ namespace REACTOR {
                         // Reset parser for next request
                         (*parser_ptr)->reset();
                         
-                        // Close connection after each request (HTTP/1.0 style)
-                        should_disconnect = true;
-                        break;
+                        // DON'T disconnect immediately - let the worker thread handle it
+                        // The HTTPRequestTask will close the connection after sending response
+                        return;
                     } else if ((*parser_ptr)->has_error()) {
                         // Parsing error - send 400 Bad Request
                         send_error_response(fd, 400, "Bad Request");
@@ -205,6 +205,9 @@ namespace REACTOR {
         }
     }
 
+    void EventLoop::close_connection(int fd) {
+        handle_client_disconnect(fd);
+    }
     void EventLoop::send_error_response(int fd, int status_code, const std::string& status_text) {
         CORE::Response response;
         response.status_code = status_code;

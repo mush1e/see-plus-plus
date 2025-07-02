@@ -61,9 +61,9 @@ namespace CORE {
             
             while (total_sent < response_size) {
                 ssize_t sent = send(connection->socket_fd, 
-                                  response_str.c_str() + total_sent, 
-                                  response_size - total_sent, 
-                                  MSG_NOSIGNAL);
+                                response_str.c_str() + total_sent, 
+                                response_size - total_sent, 
+                                MSG_NOSIGNAL);
                 
                 if (sent == -1) {
                     if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -71,7 +71,7 @@ namespace CORE {
                         continue;
                     } else {
                         std::cerr << "Failed to send response on worker " << worker_id 
-                                 << ": " << strerror(errno) << std::endl;
+                                << ": " << strerror(errno) << std::endl;
                         break;
                     }
                 } else if (sent == 0) {
@@ -81,6 +81,9 @@ namespace CORE {
                     total_sent += sent;
                 }
             }
+            
+            // Close the connection after sending response (HTTP/1.0 style)
+            close(connection->socket_fd);
         }
     };
 

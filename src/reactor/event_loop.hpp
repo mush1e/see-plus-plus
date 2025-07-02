@@ -23,6 +23,8 @@ namespace REACTOR {
         bool setup_server_socket(uint16_t port);
         void run();        
         void stop();
+
+        void close_connection(int fd);
     
     private:
         void handle_event(const EventData& event);
