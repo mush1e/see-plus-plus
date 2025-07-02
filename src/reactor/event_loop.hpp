@@ -3,17 +3,17 @@
 #include "notifier.hpp"
 #include "../executor/thread_pool.hpp"
 #include "../core/router.hpp"
-#include "../core/types.hpp"
-#include "../core/http_parser.hpp"
-
+#include "../core/connection_manager.hpp"
 
 #include <mutex>
 #include <atomic>
-#include <map>
+#include <thread>
+#include <chrono>
+
 namespace REACTOR {
-    static constexpr uint32_t FLAG_READ       = 1;  // Flag for Readable    
-    static constexpr uint32_t FLAG_DISCONNECT = 2;  // Flag for EOF/Closed
-    static constexpr uint32_t FLAG_ERROR      = 3;  // Flag for error
+    static constexpr uint32_t FLAG_READ       = 1;
+    static constexpr uint32_t FLAG_DISCONNECT = 2;
+    static constexpr uint32_t FLAG_ERROR      = 3;
 
     class EventLoop {
     public:
@@ -23,7 +23,6 @@ namespace REACTOR {
         bool setup_server_socket(uint16_t port);
         void run();        
         void stop();
-
         void close_connection(int fd);
     
     private:
@@ -31,22 +30,23 @@ namespace REACTOR {
         void handle_new_connections();
         void handle_client_event(int fd, uint32_t events);
         void handle_client_disconnect(int fd);
+        void cleanup_timed_out_connections();
         int make_socket_nonblocking(int socket_fd);
+        void send_error_response(int fd, int status_code, const std::string& status_text);
 
         std::unique_ptr<EventNotifier> notifier;
         EXECUTOR::ThreadPool* thread_pool;
         CORE::Router &router;
-        int server_socket {};
-        std::atomic<bool> should_stop {};
-
-        // Manage active connections
-        std::map<int, std::shared_ptr<CORE::ConnectionState>> connections;
-        std::mutex connections_mutex;
-        std::mutex cout_mutex;
-
-        std::map<int, std::unique_ptr<CORE::HTTPParser>> parsers;
-        std::mutex parsers_mutex;
-        void send_error_response(int fd, int status_code, const std::string& status_text);
+        CORE::ConnectionManager connection_manager;
+        
+        int server_socket = -1;
+        std::atomic<bool> should_stop{false};
+        
+        // Cleanup thread for connection timeouts
+        std::thread cleanup_thread;
+        std::atomic<bool> cleanup_should_stop{false};
+        
+        void cleanup_worker();
     };
 
 } // namespace REACTOR
