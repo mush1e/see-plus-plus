@@ -1,25 +1,29 @@
 #include <iostream>
-#include <signal.h>
-
-// signal_handler represents a helper function
-// to handle signals recieved from the user/OS
-// and initiate graceful shutdown
-void signal_handler(int sig) {
-    switch (sig) {
-        case SIGINT:
-            std::cout << "Interupt signal recieved\n";
-            break;
-        case SIGTERM:
-            std::cout << "Termination signal recieved\n";
-            break;
-        default:
-            std::cout << "signal SIG : " << sig << " recieved\n";
-    }
-}
+#include "server/server.hpp"
+#include "controllers/hello_controller.hpp"
+#include "controllers/json_controller.hpp"
 
 int main() {
-    std::cout << "Hello world!\n";
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
+    try {
+        // Create server on port 8080 with 4 worker threads
+        SERVER::Server server(8080, 4);
+        
+        // Add routes
+        server.add_route("GET", "/", std::make_shared<HelloController>());
+        server.add_route("GET", "/hello", std::make_shared<HelloController>());
+        server.add_route("GET", "/api/status", std::make_shared<JsonController>());
+        
+        // Configure server
+        server.set_keep_alive(false);  // HTTP/1.0 style for now
+        server.set_request_timeout(30);
+        
+        // Start server (blocking call)
+        server.start();
+        
+    } catch (const std::exception& e) {
+        std::cerr << "Server error: " << e.what() << std::endl;
+        return 1;
+    }
+    
     return 0;
 }

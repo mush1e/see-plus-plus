@@ -4,6 +4,8 @@
 #include "../executor/thread_pool.hpp"
 #include "../core/router.hpp"
 #include "../core/types.hpp"
+#include "../core/http_parser.hpp"
+
 
 #include <mutex>
 #include <atomic>
@@ -39,6 +41,10 @@ namespace REACTOR {
         std::map<int, std::shared_ptr<CORE::ConnectionState>> connections;
         std::mutex connections_mutex;
         std::mutex cout_mutex;
+
+        std::map<int, std::unique_ptr<CORE::HTTPParser>> parsers;
+        std::mutex parsers_mutex;
+        void send_error_response(int fd, int status_code, const std::string& status_text);
     };
 
 } // namespace REACTOR

@@ -1,6 +1,8 @@
 #include "event_loop.hpp"
+#include "../core/http_request_task.hpp"
 
 #include <iostream>
+#include <memory>
 #include <sys/socket.h> // For the Berkeley sockets API
 #include <unistd.h>     // For close
 #include <fcntl.h>      // For file control shit
@@ -131,14 +133,12 @@ namespace REACTOR {
     }
 
     void EventLoop::handle_client_event(int fd, uint32_t events) {
-        // 1) Readable?
         if (events & FLAG_READ) {
             std::shared_ptr<CORE::ConnectionState> conn;
-            {   // lock while grabbing the connection
+            {   
                 std::lock_guard<std::mutex> lock(connections_mutex);
                 auto it = connections.find(fd);
                 if (it == connections.end()) {
-                    // no such connection (maybe raced a disconnect)
                     return;
                 }
                 conn = it->second;
@@ -146,31 +146,83 @@ namespace REACTOR {
         
             constexpr size_t BUF_SIZE = 4096;
             char buffer[BUF_SIZE];
+            bool should_disconnect = false;
+            
             for (;;) {
                 ssize_t n = recv(fd, buffer, BUF_SIZE, 0);
                 if (n > 0) {
-                    conn->http_buffer.append(buffer, n);
-                } else if (n == 0) {
-                    handle_client_disconnect(fd);
-                    return;
-                } else {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    // Get or create parser for this connection
+                    std::unique_ptr<CORE::HTTPParser>* parser_ptr = nullptr;
+                    {
+                        std::lock_guard<std::mutex> lock(parsers_mutex);
+                        auto& parser = parsers[fd];
+                        if (!parser) {
+                            parser = std::make_unique<CORE::HTTPParser>();
+                        }
+                        parser_ptr = &parser;
+                    }
+                    
+                    // Parse the incoming data
+                    std::string data(buffer, n);
+                    CORE::Request request;
+                    
+                    if ((*parser_ptr)->parse(data, request)) {
+                        // Complete request received - process it
+                        auto task = std::make_unique<CORE::HTTPRequestTask>(request, conn, router);
+                        thread_pool->enqueue_task(std::move(task));
+                        
+                        // Reset parser for next request
+                        (*parser_ptr)->reset();
+                        
+                        // Close connection after each request (HTTP/1.0 style)
+                        should_disconnect = true;
                         break;
-                    else {
+                    } else if ((*parser_ptr)->has_error()) {
+                        // Parsing error - send 400 Bad Request
+                        send_error_response(fd, 400, "Bad Request");
+                        should_disconnect = true;
+                        break;
+                    }
+                    
+                } else if (n == 0) {
+                    should_disconnect = true;
+                    break;
+                } else {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                        break;
+                    } else {
                         perror("recv");
-                        handle_client_disconnect(fd);
-                        return;
+                        should_disconnect = true;
+                        break;
                     }
                 }
             }
-        }
-        if (events & (FLAG_DISCONNECT | FLAG_ERROR)) {
-            handle_client_disconnect(fd);
+            
+            if (should_disconnect) {
+                handle_client_disconnect(fd);
+                return;
+            }
         }
     }
 
-    void EventLoop::handle_client_disconnect(int fd) {
-        std::lock_guard<std::mutex> lock(connections_mutex);
+    void EventLoop::send_error_response(int fd, int status_code, const std::string& status_text) {
+        CORE::Response response;
+        response.status_code = status_code;
+        response.status_text = status_text;
+        response.headers["Content-Type"] = "text/plain";
+        response.headers["Connection"] = "close";
+        response.headers["Server"] = "CustomHTTPServer/1.0";
+        response.body = std::to_string(status_code) + " " + status_text;
+        response.headers["Content-Length"] = std::to_string(response.body.size());
+        
+        std::string response_str = response.str();
+        send(fd, response_str.c_str(), response_str.size(), MSG_NOSIGNAL);
+    }
+
+    void REACTOR::EventLoop::handle_client_disconnect(int fd) {
+        std::lock_guard<std::mutex> connections_lock(connections_mutex);
+        std::lock_guard<std::mutex> parsers_lock(parsers_mutex);
+        
         if (connections.find(fd) == connections.end()) {
             return;
         }
@@ -178,8 +230,8 @@ namespace REACTOR {
         notifier->remove_fd(fd);
         close(fd);
         connections.erase(fd);
+        parsers.erase(fd);  // Clean up parser
         
         std::cout << "Client disconnected fd: " << fd << std::endl;
     }
-
 } // namespace REACTOR
