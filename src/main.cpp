@@ -6,7 +6,7 @@
 int main() {
     try {
         // Create server on port 8080 with 4 worker threads
-        SERVER::Server server(8080, 4);
+        SERVER::Server server(8080, 10);
         
         // Add routes
         server.add_route("GET", "/", std::make_shared<HelloController>());
