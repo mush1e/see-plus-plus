@@ -183,18 +183,16 @@ namespace REACTOR {
 
     void EventLoop::handle_client_event(int fd, uint32_t events) {
         if (events & FLAG_READ) {
-            auto conn = connection_manager.get_connection(fd);
-            if (!conn) {
-                LOG_WARN("Received event for unknown connection fd:", fd);
+            // NEW: Get safe handle instead of raw pointers
+            auto conn_handle = connection_manager.get_connection_handle(fd);
+            if (!conn_handle.is_valid()) {
+                LOG_WARN("Received event for invalid connection fd:", fd);
                 return;
             }
 
-            auto parser = connection_manager.get_parser(fd);
-            if (!parser) {
-                LOG_ERROR("No parser available for connection fd:", fd);
-                handle_client_disconnect(fd);
-                return;
-            }
+            // Now we can safely access connection and parser
+            auto conn = conn_handle.connection();
+            auto parser = conn_handle.parser();
         
             constexpr size_t BUF_SIZE = 4096;
             char buffer[BUF_SIZE];
@@ -204,7 +202,7 @@ namespace REACTOR {
             for (;;) {
                 ssize_t n = recv(fd, buffer, BUF_SIZE, 0);
                 if (n > 0) {
-                    // Check request size limit
+                    // Check request size limit - this modifies connection data
                     if (!connection_manager.check_request_size_limit(fd, n)) {
                         LOG_WARN("Request size limit exceeded for fd:", fd);
                         send_error_response(fd, 413, "Request Entity Too Large");
@@ -212,7 +210,7 @@ namespace REACTOR {
                         break;
                     }
 
-                    // Update last activity
+                    // Update last activity - safe because we hold the handle
                     conn->last_activity = std::chrono::steady_clock::now();
                     
                     // Parse the incoming data
@@ -222,15 +220,16 @@ namespace REACTOR {
                     if (parser->parse(data, request)) {
                         // Complete request received - process it
                         LOG_DEBUG("Complete HTTP request received from fd:", fd, 
-                                 request.method, request.path);
+                                request.method, request.path);
                         
+                        // Create task with the connection (shared_ptr keeps it alive)
                         auto task = std::make_unique<CORE::HTTPRequestTask>(request, conn, router);
                         thread_pool->enqueue_task(std::move(task));
                         
                         // Reset parser for next request (keep-alive support)
                         connection_manager.reset_parser(fd);
                         
-                        // Don't disconnect - this connection can handle more requests
+                        // Connection can handle more requests
                         return;
                         
                     } else if (parser->has_error()) {
@@ -250,7 +249,7 @@ namespace REACTOR {
                 } else {
                     // recv error
                     if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                        // No more data available right now
+                        // No more data available right now - this is normal for non-blocking sockets
                         break;
                     } else {
                         LOG_ERROR("recv error for fd:", fd, "-", strerror(errno));
