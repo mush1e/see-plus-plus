@@ -3,6 +3,7 @@
 #include "controllers/hello_controller.hpp"
 #include "controllers/json_controller.hpp"
 #include "controllers/static_file_controller.hpp"
+#include "controllers/test_body_controller.hpp"
 
 int main() {
     try {
@@ -21,6 +22,9 @@ int main() {
         server.add_route("GET", "/", static_controller);
         server.add_route("GET", "/index.html", static_controller);
         
+        server.add_route("POST", "/test/body", std::make_shared<TestBodyController>());
+        server.add_route("PUT", "/test/body", std::make_shared<TestBodyController>());
+
         // Enable performance features
         server.set_keep_alive(true);
         server.set_request_timeout(60);
