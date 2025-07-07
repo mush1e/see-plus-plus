@@ -1,4 +1,3 @@
-// src/core/router.hpp
 #pragma once
 
 #include "controller.hpp"
@@ -71,9 +70,11 @@ namespace CORE {
         }
 
         // Add some useful utility routes
-        void add_static_file_route(const std::string& prefix, const std::string& directory) {
+        void add_static_file_route(const std::string& prefix, 
+                                 [[maybe_unused]] const std::string& directory) {
             // TODO: Implement static file serving
-            // For now, just add a pattern route
+            // For now, just add a pattern route as placeholder
+            // The directory parameter will be used when we implement static serving
             add_pattern_route("GET", prefix + "/(.*)", nullptr);
         }
 

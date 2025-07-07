@@ -9,6 +9,7 @@
 #include <thread>   // For std::thread
 #include <atomic>   // For atomic
 #include <csignal>  // For signal stuff
+#include <iostream>
 namespace SERVER {
 
     // Server represents a class encapsulating the server 
@@ -29,7 +30,14 @@ namespace SERVER {
         bool is_running() const;        
 
         // Configuration
-        void set_keep_alive(bool enabled) { keep_alive_enabled = enabled; }
+        void set_keep_alive(bool enabled) { 
+            keep_alive_enabled = enabled; 
+            // Notify event loop of the change
+            if (event_loop) {
+                event_loop->set_keep_alive_enabled(enabled);
+            }
+            std::cout << "Keep-alive " << (enabled ? "enabled" : "disabled") << std::endl;
+        }
         void set_request_timeout(int seconds) { request_timeout_seconds = seconds; }
 
     private:

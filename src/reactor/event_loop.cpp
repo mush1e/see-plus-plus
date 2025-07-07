@@ -34,7 +34,7 @@ namespace REACTOR {
         // Start cleanup thread for connection management
         cleanup_thread = std::thread(&EventLoop::cleanup_worker, this);
         
-        LOG_INFO("EventLoop initialized with connection manager");
+        LOG_INFO("EventLoop initialized with connection manager and keep-alive support");
     }
 
     EventLoop::~EventLoop() {
@@ -108,7 +108,8 @@ namespace REACTOR {
     }
 
     void EventLoop::run() {
-        LOG_INFO("🚀 Event loop started!");
+        LOG_INFO("🚀 Event loop started! Keep-alive:", 
+                (keep_alive_enabled.load() ? "enabled" : "disabled"));
         while (!should_stop.load()) {
             auto events = notifier->wait_for_events(1000); // 1 second timeout
             for (const auto& event : events) {
@@ -183,7 +184,7 @@ namespace REACTOR {
 
     void EventLoop::handle_client_event(int fd, uint32_t events) {
         if (events & FLAG_READ) {
-            // NEW: Get safe handle instead of raw pointers
+            // Use thread-safe connection handle
             auto conn_handle = connection_manager.get_connection_handle(fd);
             if (!conn_handle.is_valid()) {
                 LOG_WARN("Received event for invalid connection fd:", fd);
@@ -222,19 +223,26 @@ namespace REACTOR {
                         LOG_DEBUG("Complete HTTP request received from fd:", fd, 
                                 request.method, request.path);
                         
-                        // Create task with the connection (shared_ptr keeps it alive)
-                        auto task = std::make_unique<CORE::HTTPRequestTask>(request, conn, router);
+                        // Pass keep-alive setting to task
+                        auto task = std::make_unique<CORE::HTTPRequestTask>(
+                            request, conn, router, keep_alive_enabled.load()
+                        );
                         thread_pool->enqueue_task(std::move(task));
                         
-                        // Reset parser for next request (keep-alive support)
+                        // Reset parser but DON'T disconnect for keep-alive
+                        // The task will decide whether to close the connection
                         connection_manager.reset_parser(fd);
                         
-                        // Connection can handle more requests
+                        // For keep-alive, we continue listening on this fd
+                        // The connection stays in the event loop!
+                        if (keep_alive_enabled.load()) {
+                            LOG_DEBUG("Request processed, keeping connection alive for fd:", fd);
+                        }
                         return;
                         
                     } else if (parser->has_error()) {
                         // Parsing error - send 400 Bad Request
-                        LOG_WARN("HTTP parsing error for fd:", fd);
+                        LOG_WARN("HTTP parsing error for fd:", fd, "-", parser->get_error_description());
                         send_error_response(fd, 400, "Bad Request");
                         should_disconnect = true;
                         break;
@@ -272,6 +280,9 @@ namespace REACTOR {
     }
 
     void EventLoop::close_connection(int fd) {
+        // This gets called by worker threads when they want to close a connection
+        // (either because keep-alive is disabled or there was an error)
+        LOG_DEBUG("Explicit connection close requested for fd:", fd);
         handle_client_disconnect(fd);
     }
 
@@ -279,10 +290,22 @@ namespace REACTOR {
         CORE::Response response;
         response.status_code = status_code;
         response.status_text = status_text;
-        response.headers["Content-Type"] = "text/plain";
+        response.headers["Content-Type"] = "text/html";
         response.headers["Connection"] = "close";
         response.headers["Server"] = "see-plus-plus/1.0";
-        response.body = std::to_string(status_code) + " " + status_text;
+        
+        // Create a proper HTML error page
+        response.body = R"(<!DOCTYPE html>
+<html>
+<head><title>)" + std::to_string(status_code) + " " + status_text + R"(</title></head>
+<body>
+    <h1>)" + std::to_string(status_code) + " " + status_text + R"(</h1>
+    <p>The server encountered an error processing your request.</p>
+    <hr>
+    <small>see-plus-plus/1.0</small>
+</body>
+</html>)";
+        
         response.headers["Content-Length"] = std::to_string(response.body.size());
         
         std::string response_str = response.str();
@@ -294,11 +317,13 @@ namespace REACTOR {
     }
 
     void EventLoop::handle_client_disconnect(int fd) {
-        auto conn = connection_manager.get_connection(fd);
-        if (!conn) {
+        // Use thread-safe connection handle to check if connection exists
+        auto conn_handle = connection_manager.get_connection_handle(fd);
+        if (!conn_handle.is_valid()) {
             return; // Already disconnected
         }
 
+        auto conn = conn_handle.connection();
         LOG_DEBUG("Disconnecting client fd:", fd, 
                  "(", conn->client_ip, ":", conn->client_port, ")");
 

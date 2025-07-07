@@ -24,6 +24,8 @@ namespace REACTOR {
         void run();        
         void stop();
         void close_connection(int fd);
+
+        void set_keep_alive_enabled(bool enabled);
     
     private:
         void handle_event(const EventData& event);
@@ -42,6 +44,7 @@ namespace REACTOR {
         
         int server_socket = -1;
         std::atomic<bool> should_stop{false};
+        std::atomic<bool> keep_alive_enabled{false};
         
         // Cleanup thread for connection timeouts
         std::thread cleanup_thread;
