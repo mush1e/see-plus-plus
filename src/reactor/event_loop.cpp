@@ -368,4 +368,9 @@ namespace REACTOR {
         }
     }
 
+    void EventLoop::set_keep_alive_enabled(bool enabled) {
+        keep_alive_enabled.store(enabled);
+        LOG_INFO("Keep-alive", (enabled ? "enabled" : "disabled"));
+    }
+
 } // namespace REACTOR
